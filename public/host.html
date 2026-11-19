@@ -67,7 +67,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket=io();
-    let audioContext=null, state=null, timerHandle=null, remaining=10;
+    let audioContext=null, state=null, timerHandle=null, remaining=10, previousActive=null;
     const $=id=>document.getElementById(id);
 
     function tone(frequency, duration=.35, volume=.25) {
@@ -107,6 +107,9 @@
     });
 
     socket.on("state",s=>{
+      const nextActive=s.queue[0]?.number||null;
+      if(audioContext&&nextActive&&nextActive!==previousActive) playTeam(nextActive);
+      previousActive=nextActive;
       state=s;
       $("points").value=s.config.points;$("wrongPoints").value=s.config.wrongPoints;$("timerSeconds").value=s.config.timerSeconds;
       const queue=$("queue");queue.innerHTML="";

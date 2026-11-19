@@ -86,7 +86,6 @@ io.on("connection", (socket) => {
   socket.on("host_open", () => {
     clearTimer();
     pressQueue = [];
-    falseStarts = new Map();
     gameState = "open";
     broadcastState();
     if (config.timerSeconds > 0) {

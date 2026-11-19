@@ -58,7 +58,7 @@
       navigator.vibrate&&navigator.vibrate([70,40,70]);
       socket.emit("buzz");
     });
-    document.addEventListener("contextmenu",e=>e.prevent;);
+    document.addEventListener("contextmenu",e=>e.preventDefault());
     socket.on("state",state=>{
       const team=state.teams.find(t=>t.number===number);
       if(team&&team.name)name=team.name;
@@ -69,7 +69,7 @@
       else if(index===0){$("status").textContent="You are 1st!";}
       else if(index>0){$("status").textContent=`You are ${index+1}${index+1===2?"nd":index+1===3?"rd":"th"} in line`;}
       else if(state.gameState==="open"){$("status").textContent="Buzz now!";}
-      else if(state.gameState==="locked"){$("status").textContent="Locked out";}
+      else if(state.gameState==="locked"){$("status").textContent="Waiting";}
       else {$("status").textContent="Waiting";}
       pressed=false;
       $("buzzButton").style.opacity=(state.gameState==="open"&&index<0&&!falseStart)?1:.55;
