@@ -14,6 +14,9 @@
     #status{font-size:clamp(1.6rem,7vw,3rem);text-align:center;font-weight:900;padding:16px 8px}
     #buzzButton{width:calc(100% - 24px);height:auto;margin:12px;border:0;border-radius:28px;background:#dc2626;color:white;font-size:clamp(3.5rem,18vw,8rem);font-weight:900;box-shadow:0 10px 30px #000}
     #teamInfo{text-align:center;font-size:1.2rem;padding:10px}
+    #micStatus{min-height:50px;text-align:center;font-size:1.4rem;font-weight:900;padding:8px;color:#94a3b8}
+    #micStatus.live{color:#ef4444}#micStatus.blocked{color:#f97316}
+    #pttButton{display:none;width:calc(100% - 24px);min-height:100px;margin:12px;border:0;border-radius:18px;background:#16a34a;color:white;font-size:2rem;font-weight:900}
   </style>
 </head>
 <body>
@@ -26,31 +29,83 @@
       <option value="9">Team 9</option><option value="10">Team 10</option><option value="11">Team 11</option><option value="12">Team 12</option>
     </select>
     <input id="teamName" maxlength="30" placeholder="Team name (optional)">
+    <input id="teamGroup" maxlength="30" placeholder="Group (for example Form 1)">
     <button id="join">Join</button>
   </div>
   <div id="buzzView">
     <div id="status">Waiting</div>
     <button id="buzzButton">BUZZ</button>
+    <div id="micStatus">MIC OFF</div>
+    <button id="pttButton">HOLD TO SPEAK</button>
     <div id="teamInfo"></div>
   </div>
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const socket=io(), $=id=>document.getElementById(id);
-    let number=null,name="",myQueueIndex=-1,pressed=false;
+    let number=null,name="",group="",myQueueIndex=-1,pressed=false;
+    let peer=null, localStream=null, micEnabled=false, pushToTalk=false;
     const saved=JSON.parse(localStorage.getItem("quizTeam")||"null");
-    if(saved&&saved.number){$("teamNumber").value=saved.number;$("teamName").value=saved.name||"";}
+    if(saved&&saved.number){$("teamNumber").value=saved.number;$("teamName").value=saved.name||"";$("teamGroup").value=saved.group||"";}
     $("join").onclick=()=>{
       number=Number($("teamNumber").value);
       if(!number){alert("Choose a team number");return;}
       name=$("teamName").value.trim();
-      localStorage.setItem("quizTeam",JSON.stringify({number,name}));
-      socket.emit("register",{number,name});
+      group=$("teamGroup").value.trim();
+      localStorage.setItem("quizTeam",JSON.stringify({number,name,group}));
+      socket.emit("register",{number,name,group});
     };
     socket.on("registered",team=>{
-      number=team.teamNumber;name=team.name||name;
+      number=team.teamNumber;name=team.name||name;group=team.group||group;
       $("setup").style.display="none";$("buzzView").style.display="grid";
-      $("teamInfo").textContent=`Team ${number}${name?" — "+name:""}`;
+      $("teamInfo").textContent=`Team ${number}${name?" — "+name:""}${group?" • "+group:""}`;
+      startMicrophone();
     });
+    async function startMicrophone(){
+      if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+        $("micStatus").textContent="Microphone unavailable";
+        $("micStatus").className="blocked";
+        return;
+      }
+      try{
+        localStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
+        localStream.getAudioTracks().forEach(track=>track.enabled=false);
+        peer=new RTCPeerConnection({iceServers:[],iceCandidatePoolSize:0});
+        localStream.getTracks().forEach(track=>peer.addTrack(track,localStream));
+        peer.onicecandidate=e=>{if(e.candidate)socket.emit("phone_ice",{candidate:e.candidate});};
+        peer.onconnectionstatechange=()=>{
+          if(peer.connectionState==="failed")$("micStatus").textContent="VOICE CONNECTION FAILED";
+        };
+        const offer=await peer.createOffer();
+        await peer.setLocalDescription(offer);
+        socket.emit("phone_offer",{sdp:peer.localDescription});
+      }catch(error){
+        $("micStatus").textContent="Microphone permission needed";
+        $("micStatus").className="blocked";
+      }
+    }
+    socket.on("host_answer",async({sdp})=>{
+      if(!peer||!sdp)return;
+      await peer.setRemoteDescription(new RTCSessionDescription(sdp));
+    });
+    socket.on("host_ice",async({candidate})=>{
+      if(peer&&candidate)try{await peer.addIceCandidate(new RTCIceCandidate(candidate));}catch(_){}
+    });
+    socket.on("mic_command",command=>{
+      pushToTalk=!!command.pushToTalk;
+      micEnabled=!!command.enabled&&!command.blocked;
+      localStream?.getAudioTracks().forEach(track=>track.enabled=micEnabled);
+      $("pttButton").style.display=pushToTalk?"block":"none";
+      if(command.blocked)$("micStatus").textContent="Mic blocked",$("micStatus").className="blocked";
+      else if(micEnabled){$("micStatus").textContent="LIVE",$("micStatus").className="live";socket.emit("voice_live",{live:true});}
+      else{$("micStatus").textContent=pushToTalk?"HOLD TO SPEAK":"MIC OFF",$("micStatus").className="";
+        socket.emit("voice_live",{live:false});}
+    });
+    function setPtt(held){
+      if(!pushToTalk)return;
+      socket.emit("ptt",{held});
+    }
+    $("pttButton").addEventListener("pointerdown",e=>{e.preventDefault();setPtt(true);navigator.vibrate&&navigator.vibrate(50);});
+    ["pointerup","pointercancel","pointerleave"].forEach(type=>$("pttButton").addEventListener(type,()=>setPtt(false)));
     $("buzzButton").addEventListener("pointerdown",e=>{
       e.preventDefault();
       if(!number||pressed)return;
