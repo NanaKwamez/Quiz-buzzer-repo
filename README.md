@@ -63,9 +63,30 @@ incoming phone audio.
 Teams are 1–12. Teams keep their number and score when their phone refreshes or
 loses the connection. The server uses arrival time to rank simultaneous presses.
 
-## Optional team sounds
+## Group sounds
 
-Place custom files in `public/sounds/` named `team1.mp3` through `team12.mp3`.
-If a file is not present, the host plays a distinct generated Web Audio tone.
+Sounds are selected by group, not by team number. The host starts with `Form 1`,
+`Form 2`, and `Form 3`, and the **Sounds** panel lets you preview each sound,
+choose its generated tone or custom file, and enable group announcements.
+
+To add custom sounds, create this folder in the repository if it does not exist:
+
+```text
+public/sounds/
+```
+
+Then copy your files into it with these exact names:
+
+```text
+public/sounds/form1.mp3
+public/sounds/form2.mp3
+public/sounds/form3.mp3
+```
+
+Restart `node server.js`, open the host page, and select **Custom** for the
+matching group in the Sounds panel. If a custom file is missing or cannot play,
+the app automatically uses its generated offline tone. To add more groups,
+enter their names in the comma-separated Groups field; they receive generated
+tones automatically and can later use files such as `form4.mp3`.
 
 The server can be changed to a different port with `PORT=4000 node server.js`.

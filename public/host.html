@@ -23,6 +23,10 @@
     .settings { margin:10px 0; background:#1c2330; padding:10px; border-radius:10px; }
     .settings label { display:inline-block; margin:4px 12px 4px 0; }
     .settings input { width:75px; padding:6px; }
+    #soundSettings { margin:10px 0; background:#1c2330; padding:12px; border-radius:10px; }
+    #soundSettings table { width:100%; border-collapse:collapse; }
+    #soundSettings td { padding:6px; border-bottom:1px solid #475569; }
+    #soundSettings button { background:#2563eb; border:0; border-radius:6px; color:#fff; padding:8px 12px; }
     .layout { display:grid; grid-template-columns:2fr 1fr; gap:16px; margin-top:16px; }
     .panel { background:#1c2330; border-radius:14px; padding:12px; }
     #queue { list-style:none; padding:0; margin:0; }
@@ -62,6 +66,14 @@
       <label>Wrong subtract <input id="wrongPoints" type="number" min="0" value="0"></label>
       <label>Timer seconds <input id="timerSeconds" type="number" min="0" value="10"></label>
     </div>
+    <section id="soundSettings">
+      <h2>Sounds</h2>
+      <label>Groups (comma-separated)
+        <input id="groupNames" style="width:min(80vw,500px)" value="Form 1, Form 2, Form 3">
+      </label>
+      <label><input id="announceGroup" type="checkbox"> Announce group name</label>
+      <table><tbody id="soundRows"></tbody></table>
+    </section>
     <div id="voiceControls">
       <label><input id="onlyActiveMic" type="checkbox" checked> Only active team can speak</label>
       <label><input id="pushToTalk" type="checkbox"> Push-to-talk</label>
@@ -80,6 +92,7 @@
   <script>
     const socket=io();
     let audioContext=null, state=null, timerHandle=null, remaining=10, previousActive=null;
+    let announceGroup=false, soundModes={}, groupNames=["Form 1","Form 2","Form 3"];
     const peerConnections=new Map(), remoteStreams=new Map(), remoteAudios=new Map();
     const $=id=>document.getElementById(id);
 
@@ -92,24 +105,56 @@
       oscillator.connect(gain); gain.connect(audioContext.destination);
       oscillator.start(); oscillator.stop(audioContext.currentTime+duration);
     }
-    function playTeam(number) {
-      const audio=new Audio(`/sounds/team${number}.mp3`);
-      let custom=false;
-      audio.addEventListener("canplay",()=>{custom=true;audio.play().catch(()=>tone(220+number*55));},{once:true});
-      audio.play().catch(()=>{});
-      audio.addEventListener("error",()=>tone(220+number*55),{once:true});
+    function groupKey(group) {
+      const match=String(group||"").match(/(\d+)/);
+      return `form${match ? match[1] : Math.max(1,groupNames.indexOf(group)+1)}`;
+    }
+    function groupForTeam(number) {
+      return state?.teams.find(team=>team.number===number)?.group || groupNames[0];
+    }
+    function defaultGroupSound(index) {
+      const base=220+index*110;
+      if(index===0){tone(base,.18,.3);setTimeout(()=>tone(base,.18,.3),230);}
+      else if(index===1){tone(base,.15,.3);setTimeout(()=>tone(base*1.35,.28,.3),170);}
+      else {tone(base,.14,.3);setTimeout(()=>tone(base*1.25,.14,.3),170);setTimeout(()=>tone(base*1.5,.18,.3),340);}
+    }
+    function playGroup(group) {
+      const index=Math.max(0,groupNames.indexOf(group));
+      const key=groupKey(group);
+      if(soundModes[key]!=="default"){
+        const audio=new Audio(`/sounds/${key}.mp3`);
+        audio.volume=+$("masterVolume").value;
+        audio.onerror=()=>defaultGroupSound(index);
+        audio.play().catch(()=>defaultGroupSound(index));
+      } else defaultGroupSound(index);
+      if(announceGroup&&"speechSynthesis" in window){
+        setTimeout(()=>speechSynthesis.speak(new SpeechSynthesisUtterance(group)),700);
+      }
     }
     function stopTimer(){clearInterval(timerHandle);timerHandle=null;}
     function startTimer(seconds){stopTimer();remaining=seconds;$("timer").textContent=seconds||"—";if(seconds<=0)return;timerHandle=setInterval(()=>{remaining--; $("timer").textContent=Math.max(0,remaining);if(remaining<=0)stopTimer();},1000);}
     $("startButton").onclick=async()=>{audioContext=new (window.AudioContext||window.webkitAudioContext)();await audioContext.resume();socket.emit("host_join");$("startOverlay").style.display="none";$("app").style.display="block";};
 
-    function sendConfig(){socket.emit("host_config",{points:+$("points").value,wrongPoints:+$("wrongPoints").value,timerSeconds:+$("timerSeconds").value});}
+    function sendConfig(){socket.emit("host_config",{points:+$("points").value,wrongPoints:+$("wrongPoints").value,timerSeconds:+$("timerSeconds").value,groupNames:$("groupNames").value.split(",").map(group=>group.trim()).filter(Boolean)});}
     ["points","wrongPoints","timerSeconds"].forEach(id=>$(id).onchange=sendConfig);
     $("onlyActiveMic").onchange=()=>socket.emit("host_voice_config",{onlyActiveMic:$("onlyActiveMic").checked});
     $("pushToTalk").onchange=()=>socket.emit("host_voice_config",{pushToTalk:$("pushToTalk").checked});
     $("muteAll").onclick=()=>socket.emit("host_mute_all");
     $("unblockAll").onclick=()=>socket.emit("host_unblock_all");
     $("masterVolume").oninput=()=>remoteAudios.forEach(audio=>audio.volume=+$("masterVolume").value);
+    $("announceGroup").onchange=()=>{announceGroup=$("announceGroup").checked;};
+    $("groupNames").onchange=sendConfig;
+    function renderSoundSettings(){
+      const rows=$("soundRows"); rows.innerHTML="";
+      groupNames.forEach((group,index)=>{
+        const key=groupKey(group), row=document.createElement("tr");
+        row.innerHTML=`<td><b>${group}</b><br><small>${key}.mp3 or generated tone</small></td><td><select><option value="default">Default tone</option><option value="custom">Custom ${key}.mp3</option></select></td><td><button>Test</button></td>`;
+        const select=row.querySelector("select"); select.value=soundModes[key]||"custom";
+        select.onchange=()=>soundModes[key]=select.value;
+        row.querySelector("button").onclick=()=>playGroup(group);
+        rows.appendChild(row);
+      });
+    }
     $("openBtn").onclick=()=>{sendConfig();socket.emit("host_open");};
     $("correctBtn").onclick=()=>socket.emit("host_correct");
     $("wrongBtn").onclick=()=>socket.emit("host_wrong");
@@ -126,9 +171,14 @@
 
     socket.on("state",s=>{
       const nextActive=s.queue[0]?.number||null;
-      if(audioContext&&nextActive&&nextActive!==previousActive) playTeam(nextActive);
+      if(audioContext&&nextActive&&nextActive!==previousActive) playGroup(groupForTeam(nextActive));
       previousActive=nextActive;
       state=s;
+      if(Array.isArray(s.groupNames)){
+        groupNames=s.groupNames;
+        $("groupNames").value=groupNames.join(", ");
+        renderSoundSettings();
+      }
       $("onlyActiveMic").checked=!!s.voice.onlyActiveMic;
       $("pushToTalk").checked=!!s.voice.pushToTalk;
       $("liveMic").textContent=s.voice.liveTeam?`LIVE: Team ${s.voice.liveTeam}`:"MIC: none";
@@ -193,7 +243,7 @@
       const pc=peerConnections.get(number);
       if(pc&&candidate)try{await pc.addIceCandidate(new RTCIceCandidate(candidate));}catch(_){}
     });
-    socket.on("wrong",({promoted})=>{tone(110,.5,.35);if(promoted)playTeam(promoted);});
+    socket.on("wrong",({promoted})=>{tone(110,.5,.35);if(promoted&&audioContext)playGroup(groupForTeam(promoted));});
     socket.on("time_up",()=>tone(70,1,.4));
     fetch("/qr").then(r=>r.json()).then(data=>{$("qr").src=data.qr;$("network").textContent=data.url;});
   </script>

@@ -29,6 +29,7 @@ let falseStarts = new Map();
 let gameState = "waiting";
 let timer = null;
 let config = { points: 10, wrongPoints: 0, timerSeconds: 10 };
+let groupNames = ["Form 1", "Form 2", "Form 3"];
 const blockedTeams = new Set();
 const blockedGroups = new Set();
 let onlyActiveMic = true;
@@ -50,6 +51,7 @@ function publicState() {
     falseStarts: Array.from(falseStarts.values()),
     gameState,
     config,
+    groupNames,
     voice: {
       blockedTeams: Array.from(blockedTeams),
       blockedGroups: Array.from(blockedGroups),
@@ -281,6 +283,10 @@ io.on("connection", (socket) => {
       wrongPoints: Math.max(0, Number(incoming.wrongPoints) || 0),
       timerSeconds: Math.max(0, Number(incoming.timerSeconds) || 0)
     };
+    if (Array.isArray(incoming.groupNames)) {
+      groupNames = incoming.groupNames.map((group) => String(group).trim()).filter(Boolean).slice(0, 20);
+      if (!groupNames.length) groupNames = ["Form 1", "Form 2", "Form 3"];
+    }
     broadcastState();
   });
 
