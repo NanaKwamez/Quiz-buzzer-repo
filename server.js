@@ -19,8 +19,18 @@ if (fs.existsSync(certFile) && fs.existsSync(keyFile)) {
 const io = new Server(server);
 const PORT = Number(process.env.PORT) || 3000;
 
+app.use((_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
 app.use(express.static(path.join(__dirname, "public")));
 app.get("/", (req, res) => res.redirect("/host.html"));
+app.get("/sound-status", (_req, res) => {
+  const directory = path.join(__dirname, "public", "sounds");
+  let files = [];
+  if (fs.existsSync(directory)) files = fs.readdirSync(directory).filter((name) => /^form\d+\.mp3$/i.test(name));
+  res.json({ files });
+});
 
 const teams = new Map();
 const socketsByTeam = new Map();

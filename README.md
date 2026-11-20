@@ -89,4 +89,27 @@ the app automatically uses its generated offline tone. To add more groups,
 enter their names in the comma-separated Groups field; they receive generated
 tones automatically and can later use files such as `form4.mp3`.
 
+## If the Sounds or microphone controls are missing
+
+The app is on a feature branch until it is merged into `main`. After cloning,
+run:
+
+```bat
+git switch copilot/build-quiz-buzzer-web-app
+git pull
+npm install
+node server.js
+```
+
+Open `/host.html` explicitly (for example `http://localhost:3000/host.html`)
+and click **START** before testing audio. The **Sounds** panel and microphone
+controls appear below the host controls. If custom files do not appear, confirm
+that the filenames are lowercase and match `public\sounds\form1.mp3`,
+`public\sounds\form2.mp3`, or `public\sounds\form3.mp3`. Restart the server
+after adding files and press refresh with Ctrl+F5.
+
+Microphone controls require HTTPS certificates. Running plain HTTP will show a
+server warning and may block `getUserMedia` on phones. Create the `certs`
+folder and certificates as described in **HTTPS and voice setup**.
+
 The server can be changed to a different port with `PORT=4000 node server.js`.

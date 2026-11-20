@@ -44,6 +44,7 @@
     #network { font-size:.9rem; color:#cbd5e1; }
     #voiceControls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:#1c2330;border-radius:10px;padding:10px;margin:10px 0}
     #voiceControls button{min-height:44px;border:0;border-radius:8px;padding:8px 12px;color:white;font-weight:800}
+    #soundFileStatus{color:#facc15}.missing{color:#fb923c}.ready{color:#4ade80}
     #liveMic{color:#ef4444;font-weight:900;font-size:1.2rem}.team.live{box-shadow:0 0 0 3px #ef4444}.micBlock{background:#7f1d1d;color:white;border:0;border-radius:6px;padding:6px}
     @media(max-width:800px){ .top,.layout{grid-template-columns:1fr}.controls button{min-width:110px}#scoreboard{grid-template-columns:1fr}}
   </style>
@@ -72,6 +73,7 @@
         <input id="groupNames" style="width:min(80vw,500px)" value="Form 1, Form 2, Form 3">
       </label>
       <label><input id="announceGroup" type="checkbox"> Announce group name</label>
+      <div id="soundFileStatus">Checking custom sound files…</div>
       <table><tbody id="soundRows"></tbody></table>
     </section>
     <div id="voiceControls">
@@ -93,6 +95,7 @@
     const socket=io();
     let audioContext=null, state=null, timerHandle=null, remaining=10, previousActive=null;
     let announceGroup=false, soundModes={}, groupNames=["Form 1","Form 2","Form 3"];
+    let availableSoundFiles=new Set();
     const peerConnections=new Map(), remoteStreams=new Map(), remoteAudios=new Map();
     const $=id=>document.getElementById(id);
 
@@ -149,12 +152,20 @@
       groupNames.forEach((group,index)=>{
         const key=groupKey(group), row=document.createElement("tr");
         row.innerHTML=`<td><b>${group}</b><br><small>${key}.mp3 or generated tone</small></td><td><select><option value="default">Default tone</option><option value="custom">Custom ${key}.mp3</option></select></td><td><button>Test</button></td>`;
-        const select=row.querySelector("select"); select.value=soundModes[key]||"custom";
+        const select=row.querySelector("select");
+        select.value=soundModes[key]||"default";
+        const status=row.querySelector("small");
+        if(availableSoundFiles.has(`${key}.mp3`)){status.textContent=`${key}.mp3 ready`;status.className="ready";}
+        else {status.textContent=`${key}.mp3 missing — default tone available`;status.className="missing";}
         select.onchange=()=>soundModes[key]=select.value;
         row.querySelector("button").onclick=()=>playGroup(group);
         rows.appendChild(row);
       });
+      const found=availableSoundFiles.size;
+      $("soundFileStatus").textContent=found?`${found} custom sound file(s) found`:"No custom files found — generated tones are active";
+      $("soundFileStatus").className=found?"ready":"missing";
     }
+    renderSoundSettings();
     $("openBtn").onclick=()=>{sendConfig();socket.emit("host_open");};
     $("correctBtn").onclick=()=>socket.emit("host_correct");
     $("wrongBtn").onclick=()=>socket.emit("host_wrong");
@@ -246,6 +257,10 @@
     socket.on("wrong",({promoted})=>{tone(110,.5,.35);if(promoted&&audioContext)playGroup(groupForTeam(promoted));});
     socket.on("time_up",()=>tone(70,1,.4));
     fetch("/qr").then(r=>r.json()).then(data=>{$("qr").src=data.qr;$("network").textContent=data.url;});
+    fetch("/sound-status").then(r=>r.json()).then(data=>{
+      availableSoundFiles=new Set((data.files||[]).map(name=>name.toLowerCase()));
+      renderSoundSettings();
+    }).catch(()=>renderSoundSettings());
   </script>
 </body>
 </html>
