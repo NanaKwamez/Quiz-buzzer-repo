@@ -376,11 +376,22 @@
         pc.onconnectionstatechange=()=>handleHostConnectionState(number,pc);
         pc.ontrack=e=>{
           debug(`Track received for Team #${number}: ${e.track.kind}`);
+          if(e.track.kind==="audio"&&e.receiver){
+            try{
+              e.receiver.playoutDelayHint=0;
+              debug(`Team #${number} receiver playout delay hint: 0`);
+            }catch(error){debug(`Team #${number} playout delay hint unavailable: ${error.message}`);}
+            try{
+              e.receiver.jitterBufferTarget=0;
+              debug(`Team #${number} receiver jitter buffer target: 0`);
+            }catch(error){debug(`Team #${number} jitter buffer target unavailable: ${error.message}`);}
+          }
           const stream=e.streams[0]||new MediaStream([e.track]);
           remoteStreams.set(number,stream);
           let audio=remoteAudios.get(number);
-              if(!audio){audio=document.createElement("audio");audio.controls=false;audio.autoplay=true;audio.playsInline=true;audio.volume=+$("masterVolume").value;document.body.appendChild(audio);remoteAudios.set(number,audio);}
+              if(!audio){audio=document.createElement("audio");audio.controls=false;audio.autoplay=true;audio.playsInline=true;audio.preload="auto";audio.volume=+$("masterVolume").value;document.body.appendChild(audio);remoteAudios.set(number,audio);}
           audio.srcObject=stream;
+          audio.play().catch(error=>debug(`Team #${number} audio playback pending: ${error.message}`));
         };
       }
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
