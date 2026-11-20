@@ -45,6 +45,7 @@
     #voiceControls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:#1c2330;border-radius:10px;padding:10px;margin:10px 0}
     #voiceControls button{min-height:44px;border:0;border-radius:8px;padding:8px 12px;color:white;font-weight:800}
     #soundFileStatus{color:#facc15}.missing{color:#fb923c}.ready{color:#4ade80}
+    #webrtcLog{height:130px;overflow:auto;background:#090c12;border:1px solid #475569;border-radius:8px;padding:8px;font:12px monospace;white-space:pre-wrap}
     #liveMic{color:#ef4444;font-weight:900;font-size:1.2rem}.team.live{box-shadow:0 0 0 3px #ef4444}.micBlock{background:#7f1d1d;color:white;border:0;border-radius:6px;padding:6px}
     @media(max-width:800px){ .top,.layout{grid-template-columns:1fr}.controls button{min-width:110px}#scoreboard{grid-template-columns:1fr}}
   </style>
@@ -85,6 +86,7 @@
       <span id="liveMic">MIC: none</span>
       <span id="groupControls"></span>
     </div>
+    <section class="panel"><h2>WebRTC Debug Log</h2><div id="webrtcLog"></div></section>
     <div class="layout">
       <section class="panel"><h2>Press Queue</h2><ol id="queue"></ol></section>
       <section class="panel"><h2>Scoreboard</h2><div id="scoreboard"></div></section>
@@ -98,6 +100,12 @@
     let availableSoundFiles=new Set();
     const peerConnections=new Map(), remoteStreams=new Map(), remoteAudios=new Map();
     const $=id=>document.getElementById(id);
+    function debug(message){
+      const stamp=new Date().toLocaleTimeString();
+      const line=`[${stamp}] ${message}`;
+      console.log("WebRTC:",message);
+      if($("webrtcLog")){$("webrtcLog").textContent+=(line+"\n");$("webrtcLog").scrollTop=$("webrtcLog").scrollHeight;}
+    }
 
     function tone(frequency, duration=.35, volume=.25) {
       if(!audioContext) return;
@@ -193,7 +201,8 @@
       }
       $("onlyActiveMic").checked=!!s.voice.onlyActiveMic;
       $("pushToTalk").checked=!!s.voice.pushToTalk;
-      $("liveMic").textContent=s.voice.liveTeam?`LIVE: Team ${s.voice.liveTeam}`:"MIC: none";
+      const liveTeam=s.teams.find(team=>team.number===s.voice.liveTeam);
+      $("liveMic").textContent=liveTeam?`MIC: Team #${liveTeam.number} (${liveTeam.group||"No group"})`:"MIC: none";
       const groups=[...new Set(s.teams.map(team=>team.group).filter(Boolean))];
       $("groupControls").innerHTML="";
       groups.forEach(group=>{
@@ -225,20 +234,24 @@
         div.classList.toggle("live",s.voice.liveTeam===team.number);
         const teamBlocked=s.voice.blockedTeams.includes(team.number)||s.voice.blockedGroups.includes(team.group)||s.voice.muteAll;
         const teamToggle=s.voice.blockedTeams.includes(team.number);
-        div.innerHTML=`<b class="teamNumber">#${team.number}</b><div><div>${team.name||"Unnamed"} ${team.group?"• "+team.group:""}</div><small class="${team.connected?"connected":"disconnected"}">${team.connected?"Connected":"Disconnected"} • ${teamBlocked?"MIC BLOCKED":s.voice.liveTeam===team.number?"MIC LIVE":"MIC OFF"}</small></div><div><span class="teamScore">${team.score}</span><button class="micBlock">${teamToggle?"Unblock mic":"Block mic"}</button><button class="kick">Kick</button></div>`;
+        div.innerHTML=`<b class="teamNumber">#${team.number}</b><div><div>${team.name||"Unnamed"} ${team.group?"• "+team.group:""}</div><small class="${team.connected?"connected":"disconnected"}">${team.connected?"Connected":"Disconnected"} • Mic: ${team.micPermission||"unavailable"} • ${teamBlocked?"MIC BLOCKED":s.voice.liveTeam===team.number?"MIC LIVE":"MIC OFF"}</small></div><div><span class="teamScore">${team.score}</span><button class="micTest">Test mic</button><button class="micBlock">${teamToggle?"Unblock mic":"Block mic"}</button><button class="kick">Kick</button></div>`;
         div.querySelector(".micBlock").onclick=()=>socket.emit("host_block_team",{number:team.number,blocked:!teamToggle});
+        div.querySelector(".micTest").onclick=()=>socket.emit("host_test_mic",{number:team.number});
         div.querySelector(".kick").onclick=()=>socket.emit("host_kick",team.number);board.appendChild(div);
       });
       if(s.gameState==="open"&&!timerHandle) startTimer(s.config.timerSeconds);
       if(s.gameState!=="open") stopTimer();
     });
     socket.on("phone_offer",async({number,sdp})=>{
+      debug(`Offer received for Team #${number}`);
       let pc=peerConnections.get(number);
       if(!pc){
         pc=new RTCPeerConnection({iceServers:[],iceCandidatePoolSize:0});
         peerConnections.set(number,pc);
         pc.onicecandidate=e=>{if(e.candidate)socket.emit("host_ice",{number,candidate:e.candidate});};
+        pc.onconnectionstatechange=()=>debug(`Team #${number} ICE state: ${pc.connectionState}`);
         pc.ontrack=e=>{
+          debug(`Track received for Team #${number}: ${e.track.kind}`);
           const stream=e.streams[0]||new MediaStream([e.track]);
           remoteStreams.set(number,stream);
           let audio=remoteAudios.get(number);
@@ -250,10 +263,11 @@
       const answer=await pc.createAnswer();
       await pc.setLocalDescription(answer);
       socket.emit("host_answer",{number,sdp:pc.localDescription});
+      debug(`Answer sent for Team #${number}`);
     });
     socket.on("phone_ice",async({number,candidate})=>{
       const pc=peerConnections.get(number);
-      if(pc&&candidate)try{await pc.addIceCandidate(new RTCIceCandidate(candidate));}catch(_){}
+      if(pc&&candidate)try{await pc.addIceCandidate(new RTCIceCandidate(candidate));debug(`ICE candidate added for Team #${number}`);}catch(error){debug(`ICE candidate error Team #${number}: ${error.message}`);}
     });
     socket.on("wrong",({promoted})=>{tone(110,.5,.35);if(promoted&&audioContext)playGroup(groupForTeam(promoted));});
     socket.on("time_up",()=>tone(70,1,.4));

@@ -21,23 +21,17 @@ Express, and Socket.IO and does not require a CDN or internet connection.
 
 ## HTTPS and voice setup
 
-Phone microphones require HTTPS. Install [mkcert](https://github.com/FiloSottile/mkcert),
-then generate certificates for the laptop's local IP address:
+The app starts only in HTTPS mode. On startup it automatically creates a
+self-signed certificate in `certs/` using the laptop's current local IP address
+and caches it there. If the IP changes, the certificate is regenerated
+automatically.
 
-```bash
-mkcert -install
-mkdir certs
-mkcert -cert-file certs/localhost.pem -key-file certs/localhost-key.pem localhost 127.0.0.1 192.168.1.20
-node server.js
-```
+Open the HTTPS address printed in the terminal on the host laptop too. The first
+time a phone or laptop opens it, tap or click **Advanced**, then **Proceed**
+to accept the certificate warning. You must accept it on every phone before
+microphone access can work.
 
-Replace `192.168.1.20` with the laptop IP printed or found with `ipconfig`
-(Windows) or `hostname -I` (Linux). On the phone, trust the mkcert local CA or
-accept the server certificate warning. Use the HTTPS URL printed by the server.
-
-Custom certificate paths can be supplied with `SSL_CERT` and `SSL_KEY`. If the
-certificate files are absent, the server falls back to HTTP with a warning, but
-phone microphone access is unavailable in that mode.
+Custom certificate paths can be supplied with `SSL_CERT` and `SSL_KEY`.
 
 ## Voice controls
 
@@ -108,8 +102,8 @@ that the filenames are lowercase and match `public\sounds\form1.mp3`,
 `public\sounds\form2.mp3`, or `public\sounds\form3.mp3`. Restart the server
 after adding files and press refresh with Ctrl+F5.
 
-Microphone controls require HTTPS certificates. Running plain HTTP will show a
-server warning and may block `getUserMedia` on phones. Create the `certs`
-folder and certificates as described in **HTTPS and voice setup**.
+The server never starts over plain HTTP. Use only the HTTPS address printed at
+startup. Running this app from an existing `main` branch may expose old files;
+use the current feature branch.
 
 The server can be changed to a different port with `PORT=4000 node server.js`.

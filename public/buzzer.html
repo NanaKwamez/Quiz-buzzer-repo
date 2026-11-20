@@ -46,28 +46,50 @@
     let peer=null, localStream=null, micEnabled=false, pushToTalk=false;
     const saved=JSON.parse(localStorage.getItem("quizTeam")||"null");
     if(saved&&saved.number){$("teamNumber").value=saved.number;$("teamName").value=saved.name||"";$("teamGroup").value=saved.group||"";}
-    $("join").onclick=()=>{
+    $("join").onclick=async ()=>{
       number=Number($("teamNumber").value);
       if(!number){alert("Choose a team number");return;}
       name=$("teamName").value.trim();
       group=$("teamGroup").value.trim();
       localStorage.setItem("quizTeam",JSON.stringify({number,name,group}));
       socket.emit("register",{number,name,group});
+      await startMicrophonePermission();
     };
     socket.on("registered",team=>{
       number=team.teamNumber;name=team.name||name;group=team.group||group;
       $("setup").style.display="none";$("buzzView").style.display="grid";
       $("teamInfo").textContent=`Team ${number}${name?" — "+name:""}${group?" • "+group:""}`;
-      startMicrophone();
     });
-    async function startMicrophone(){
-      if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-        $("micStatus").textContent="Microphone unavailable";
+    async function startMicrophonePermission(){
+      if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+        $("micStatus").textContent="Mic unavailable: open the https:// address and accept the certificate warning";
         $("micStatus").className="blocked";
+        socket.emit("mic_permission",{state:"unavailable"});
         return;
       }
       try{
-        localStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
+        localStream=await navigator.mediaDevices.getUserMedia({
+          audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},
+          video:false
+        });
+        localStream.getAudioTracks().forEach(track=>track.enabled=false);
+        $("micStatus").textContent="Mic ready (off)";
+        $("micStatus").className="";
+        socket.emit("mic_permission",{state:"granted"});
+        await startMicrophone();
+      }catch(error){
+        if(error&&["NotAllowedError","PermissionDeniedError","SecurityError"].includes(error.name)){
+          $("micStatus").textContent="Mic permission denied. Allow the microphone in your browser settings, then refresh";
+        }else{
+          $("micStatus").textContent="Mic unavailable: open the https:// address and accept the certificate warning";
+        }
+        $("micStatus").className="blocked";
+        socket.emit("mic_permission",{state:error?.name==="NotAllowedError"?"denied":"unavailable"});
+      }
+    }
+    async function startMicrophone(){
+      if(!localStream) return;
+      try{
         localStream.getAudioTracks().forEach(track=>track.enabled=false);
         peer=new RTCPeerConnection({iceServers:[],iceCandidatePoolSize:0});
         localStream.getTracks().forEach(track=>peer.addTrack(track,localStream));
@@ -97,7 +119,7 @@
       $("pttButton").style.display=pushToTalk?"block":"none";
       if(command.blocked)$("micStatus").textContent="Mic blocked",$("micStatus").className="blocked";
       else if(micEnabled){$("micStatus").textContent="LIVE",$("micStatus").className="live";socket.emit("voice_live",{live:true});}
-      else{$("micStatus").textContent=pushToTalk?"HOLD TO SPEAK":"MIC OFF",$("micStatus").className="";
+      else{$("micStatus").textContent=pushToTalk?"HOLD TO SPEAK":"Mic ready (off)",$("micStatus").className="";
         socket.emit("voice_live",{live:false});}
     });
     function setPtt(held){
