@@ -46,6 +46,7 @@
     #voiceControls button{min-height:44px;border:0;border-radius:8px;padding:8px 12px;color:white;font-weight:800}
     #soundFileStatus{color:#facc15}.missing{color:#fb923c}.ready{color:#4ade80}
     #webrtcLog{height:130px;overflow:auto;background:#090c12;border:1px solid #475569;border-radius:8px;padding:8px;font:12px monospace;white-space:pre-wrap}
+    #diagnostics{font:12px monospace}
     #liveMic{color:#ef4444;font-weight:900;font-size:1.2rem}.team.live{box-shadow:0 0 0 3px #ef4444}.micBlock{background:#7f1d1d;color:white;border:0;border-radius:6px;padding:6px}
     @media(max-width:800px){ .top,.layout{grid-template-columns:1fr}.controls button{min-width:110px}#scoreboard{grid-template-columns:1fr}}
   </style>
@@ -74,6 +75,7 @@
         <input id="groupNames" style="width:min(80vw,500px)" value="Form 1, Form 2, Form 3">
       </label>
       <label><input id="announceGroup" type="checkbox"> Announce group name</label>
+      <button id="rescanSounds" type="button">Rescan sounds</button>
       <div id="soundFileStatus">Checking custom sound files…</div>
       <table><tbody id="soundRows"></tbody></table>
     </section>
@@ -86,7 +88,13 @@
       <span id="liveMic">MIC: none</span>
       <span id="groupControls"></span>
     </div>
-    <section class="panel"><h2>WebRTC Debug Log</h2><div id="webrtcLog"></div></section>
+    <section class="panel">
+      <details open>
+        <summary>Diagnostics</summary>
+        <div id="diagnostics">renders/s: state 0, sounds 0, scoreboard 0, queue 0</div>
+        <h3>WebRTC Debug Log</h3><div id="webrtcLog"></div>
+      </details>
+    </section>
     <div class="layout">
       <section class="panel"><h2>Press Queue</h2><ol id="queue"></ol></section>
       <section class="panel"><h2>Scoreboard</h2><div id="scoreboard"></div></section>
@@ -99,6 +107,14 @@
     let announceGroup=false, soundModes={}, groupNames=["Form 1","Form 2","Form 3"];
     let availableSoundFiles=new Set();
     const peerConnections=new Map(), remoteStreams=new Map(), remoteAudios=new Map();
+    const lastPhoneOffers=new Map();
+    const preloadedGroupAudio=new Map();
+    let soundScanVersion=0;
+    let lastSoundsSignature="";
+    let lastStateJson="";
+    let lastQueueSignature="";
+    let lastScoreboardSignature="";
+    const renderCounts={state:0,sounds:0,scoreboard:0,queue:0};
     const $=id=>document.getElementById(id);
     function debug(message){
       const stamp=new Date().toLocaleTimeString();
@@ -133,9 +149,10 @@
       const index=Math.max(0,groupNames.indexOf(group));
       const key=groupKey(group);
       if(soundModes[key]!=="default"){
-        const audio=new Audio(`/sounds/${key}.mp3`);
+        let audio=preloadedGroupAudio.get(key);
+        if(!audio){audio=new Audio(`/sounds/${key}.mp3`);audio.preload="auto";preloadedGroupAudio.set(key,audio);}
         audio.volume=+$("masterVolume").value;
-        audio.onerror=()=>defaultGroupSound(index);
+        audio.currentTime=0;
         audio.play().catch(()=>defaultGroupSound(index));
       } else defaultGroupSound(index);
       if(announceGroup&&"speechSynthesis" in window){
@@ -155,7 +172,12 @@
     $("masterVolume").oninput=()=>remoteAudios.forEach(audio=>audio.volume=+$("masterVolume").value);
     $("announceGroup").onchange=()=>{announceGroup=$("announceGroup").checked;};
     $("groupNames").onchange=sendConfig;
+    $("rescanSounds").onclick=()=>checkCustomSounds(true);
     function renderSoundSettings(){
+      const signature=JSON.stringify({groupNames,soundModes:[...soundModes.entries()],available:[...availableSoundFiles]});
+      if(signature===lastSoundsSignature)return;
+      lastSoundsSignature=signature;
+      renderCounts.sounds++;
       const rows=$("soundRows"); rows.innerHTML="";
       groupNames.forEach((group,index)=>{
         const key=groupKey(group), row=document.createElement("tr");
@@ -189,15 +211,19 @@
     });
 
     socket.on("state",s=>{
+      const stateSignature=JSON.stringify(s);
+      if(stateSignature===lastStateJson)return;
+      lastStateJson=stateSignature;
+      renderCounts.state++;
       const nextActive=s.queue[0]?.number||null;
       if(audioContext&&nextActive&&nextActive!==previousActive) playGroup(groupForTeam(nextActive));
       previousActive=nextActive;
       state=s;
       if(Array.isArray(s.groupNames)){
+        const oldNames=JSON.stringify(groupNames);
         groupNames=s.groupNames;
         $("groupNames").value=groupNames.join(", ");
-        renderSoundSettings();
-        checkCustomSounds();
+        if(oldNames!==JSON.stringify(groupNames)){renderSoundSettings();checkCustomSounds();}
       }
       $("onlyActiveMic").checked=!!s.voice.onlyActiveMic;
       $("pushToTalk").checked=!!s.voice.pushToTalk;
@@ -214,37 +240,51 @@
         $("groupControls").appendChild(button);
       });
       $("points").value=s.config.points;$("wrongPoints").value=s.config.wrongPoints;$("timerSeconds").value=s.config.timerSeconds;
-      const queue=$("queue");queue.innerHTML="";
-      s.queue.forEach((entry,index)=>{
-        const li=document.createElement("li");
-        li.innerHTML=`<b>${index+1}${index===0?"st":index===1?"nd":index===2?"rd":"th"}</b><b>#${entry.number}</b><span>${entry.name||"Team "+entry.number}</span><span>+${entry.gap} ms</span>`;
-        queue.appendChild(li);
-      });
-      s.falseStarts.forEach(number=>{
-        const li=document.createElement("li");li.className="false";
-        li.innerHTML=`<b>—</b><b>#${number}</b><span>False start</span><span></span>`;queue.appendChild(li);
-      });
+      const queueSignature=JSON.stringify({queue:s.queue,falseStarts:s.falseStarts});
+      if(queueSignature!==lastQueueSignature){
+        lastQueueSignature=queueSignature;renderCounts.queue++;
+        const queue=$("queue");queue.innerHTML="";
+        s.queue.forEach((entry,index)=>{
+          const li=document.createElement("li");
+          li.innerHTML=`<b>${index+1}${index===0?"st":index===1?"nd":index===2?"rd":"th"}</b><b>#${entry.number}</b><span>${entry.name||"Team "+entry.number}</span><span>+${entry.gap} ms</span>`;
+          queue.appendChild(li);
+        });
+        s.falseStarts.forEach(number=>{
+          const li=document.createElement("li");li.className="false";
+          li.innerHTML=`<b>—</b><b>#${number}</b><span>False start</span><span></span>`;queue.appendChild(li);
+        });
+      }
       const active=s.queue[0];
       $("activePanel").classList.toggle("has-team",!!active);
       $("activeNumber").textContent=active?"#"+active.number:"—";
       $("activeName").textContent=active?(active.name||"Team "+active.number):(s.gameState==="open"?"No presses yet":"Waiting");
-      const board=$("scoreboard");board.innerHTML="";
-      s.teams.forEach(team=>{
-        const div=document.createElement("div");div.className="team";
-        div.classList.toggle("live",s.voice.liveTeam===team.number);
-        const teamBlocked=s.voice.blockedTeams.includes(team.number)||s.voice.blockedGroups.includes(team.group)||s.voice.muteAll;
-        const teamToggle=s.voice.blockedTeams.includes(team.number);
-        div.innerHTML=`<b class="teamNumber">#${team.number}</b><div><div>${team.name||"Unnamed"} ${team.group?"• "+team.group:""}</div><small class="${team.connected?"connected":"disconnected"}">${team.connected?"Connected":"Disconnected"} • Mic: ${team.micPermission||"unavailable"} • ${teamBlocked?"MIC BLOCKED":s.voice.liveTeam===team.number?"MIC LIVE":"MIC OFF"}</small></div><div><span class="teamScore">${team.score}</span><button class="micTest">Test mic</button><button class="micBlock">${teamToggle?"Unblock mic":"Block mic"}</button><button class="kick">Kick</button></div>`;
-        div.querySelector(".micBlock").onclick=()=>socket.emit("host_block_team",{number:team.number,blocked:!teamToggle});
-        div.querySelector(".micTest").onclick=()=>socket.emit("host_test_mic",{number:team.number});
-        div.querySelector(".kick").onclick=()=>socket.emit("host_kick",team.number);board.appendChild(div);
-      });
+      const scoreboardSignature=JSON.stringify(s.teams);
+      if(scoreboardSignature!==lastScoreboardSignature){
+        lastScoreboardSignature=scoreboardSignature;renderCounts.scoreboard++;
+        const board=$("scoreboard");board.innerHTML="";
+        s.teams.forEach(team=>{
+          const div=document.createElement("div");div.className="team";div.dataset.team=team.number;
+          div.classList.toggle("live",s.voice.liveTeam===team.number);
+          const teamBlocked=s.voice.blockedTeams.includes(team.number)||s.voice.blockedGroups.includes(team.group)||s.voice.muteAll;
+          const teamToggle=s.voice.blockedTeams.includes(team.number);
+          div.innerHTML=`<b class="teamNumber">#${team.number}</b><div><div>${team.name||"Unnamed"} ${team.group?"• "+team.group:""}</div><small class="${team.connected?"connected":"disconnected"}">${team.connected?"Connected":"Disconnected"} • Mic: ${team.micPermission||"unavailable"} • ${teamBlocked?"MIC BLOCKED":s.voice.liveTeam===team.number?"MIC LIVE":"MIC OFF"}</small></div><div><span class="teamScore">${team.score}</span><button class="micTest">Test mic</button><button class="micBlock">${teamToggle?"Unblock mic":"Block mic"}</button><button class="kick">Kick</button></div>`;
+          div.querySelector(".micBlock").onclick=()=>socket.emit("host_block_team",{number:team.number,blocked:!teamToggle});
+          div.querySelector(".micTest").onclick=()=>socket.emit("host_test_mic",{number:team.number});
+          div.querySelector(".kick").onclick=()=>socket.emit("host_kick",team.number);board.appendChild(div);
+        });
+      }
       if(s.gameState==="open"&&!timerHandle) startTimer(s.config.timerSeconds);
       if(s.gameState!=="open") stopTimer();
     });
     socket.on("phone_offer",async({number,sdp})=>{
       debug(`Offer received for Team #${number}`);
       let pc=peerConnections.get(number);
+      if(lastPhoneOffers.get(number)===sdp){
+        debug(`Ignoring duplicate offer for Team #${number}`);
+        return;
+      }
+      lastPhoneOffers.set(number,sdp);
+      if(pc){pc.close();peerConnections.delete(number);debug(`Closed old peer connection for Team #${number}`);}
       if(!pc){
         pc=new RTCPeerConnection({iceServers:[],iceCandidatePoolSize:0});
         peerConnections.set(number,pc);
@@ -269,10 +309,20 @@
       const pc=peerConnections.get(number);
       if(pc&&candidate)try{await pc.addIceCandidate(new RTCIceCandidate(candidate));debug(`ICE candidate added for Team #${number}`);}catch(error){debug(`ICE candidate error Team #${number}: ${error.message}`);}
     });
+    socket.on("phone_disconnected",({number})=>{
+      const pc=peerConnections.get(number);
+      if(pc){pc.close();peerConnections.delete(number);}
+      const audio=remoteAudios.get(number);
+      if(audio){audio.srcObject=null;audio.remove();remoteAudios.delete(number);}
+      remoteStreams.delete(number);
+      lastPhoneOffers.delete(number);
+      debug(`Cleaned up peer connection for disconnected Team #${number}`);
+    });
     socket.on("wrong",({promoted})=>{tone(110,.5,.35);if(promoted&&audioContext)playGroup(groupForTeam(promoted));});
     socket.on("time_up",()=>tone(70,1,.4));
     fetch("/qr").then(r=>r.json()).then(data=>{$("qr").src=data.qr;$("network").textContent=data.url;});
-    async function checkCustomSounds(){
+    async function checkCustomSounds(rescan=false){
+      const scanVersion=++soundScanVersion;
       availableSoundFiles=new Set();
       await Promise.all(groupNames.map(async group=>{
         const key=groupKey(group);
@@ -281,9 +331,15 @@
           if(response.ok)availableSoundFiles.add(`${key}.mp3`);
         }catch(_){}
       }));
+      if(scanVersion!==soundScanVersion)return;
       renderSoundSettings();
     }
     checkCustomSounds();
+    setInterval(()=>{
+      if(!$("diagnostics"))return;
+      $("diagnostics").textContent=`renders/s: state ${renderCounts.state}, sounds ${renderCounts.sounds}, scoreboard ${renderCounts.scoreboard}, queue ${renderCounts.queue}`;
+      renderCounts.state=renderCounts.sounds=renderCounts.scoreboard=renderCounts.queue=0;
+    },1000);
   </script>
 </body>
 </html>

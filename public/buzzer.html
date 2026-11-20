@@ -91,6 +91,8 @@
       if(!localStream) return;
       try{
         localStream.getAudioTracks().forEach(track=>track.enabled=false);
+        if(peer && peer.connectionState!=="closed") return;
+        if(peer) peer.close();
         peer=new RTCPeerConnection({iceServers:[],iceCandidatePoolSize:0});
         localStream.getTracks().forEach(track=>peer.addTrack(track,localStream));
         peer.onicecandidate=e=>{if(e.candidate)socket.emit("phone_ice",{candidate:e.candidate});};
@@ -118,9 +120,8 @@
       localStream?.getAudioTracks().forEach(track=>track.enabled=micEnabled);
       $("pttButton").style.display=pushToTalk?"block":"none";
       if(command.blocked)$("micStatus").textContent="Mic blocked",$("micStatus").className="blocked";
-      else if(micEnabled){$("micStatus").textContent="LIVE",$("micStatus").className="live";socket.emit("voice_live",{live:true});}
-      else{$("micStatus").textContent=pushToTalk?"HOLD TO SPEAK":"Mic ready (off)",$("micStatus").className="";
-        socket.emit("voice_live",{live:false});}
+      else if(micEnabled){$("micStatus").textContent="Mic LIVE",$("micStatus").className="live";}
+      else{$("micStatus").textContent=pushToTalk?"HOLD TO SPEAK":"Mic ready (off)",$("micStatus").className="";}
     });
     function setPtt(held){
       if(!pushToTalk)return;

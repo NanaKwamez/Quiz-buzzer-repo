@@ -35,6 +35,7 @@ let muteAll = false;
 let liveTeam = null;
 let testMicTeam = null;
 let testMicTimer = null;
+let lastPublicState = "";
 
 function localIP() {
   for (const entries of Object.values(os.networkInterfaces())) {
@@ -113,7 +114,12 @@ function publicState() {
   };
 }
 
-function broadcastState() { io.emit("state", publicState()); }
+function broadcastState() {
+  const next = JSON.stringify(publicState());
+  if (next === lastPublicState) return;
+  lastPublicState = next;
+  io.emit("state", JSON.parse(next));
+}
 
 function syncMics() {
   socketsByTeam.forEach((socketId, number) => {
@@ -293,9 +299,11 @@ async function main() {
       number = Number(number);
       clearTimeout(testMicTimer);
       testMicTeam = number;
+      liveTeam = number;
       syncMics();
       testMicTimer = setTimeout(() => {
         testMicTeam = null;
+        liveTeam = null;
         syncMics();
       }, 5000);
     });
@@ -319,6 +327,7 @@ async function main() {
         getTeam(socket.teamNumber).connected = false;
         if (liveTeam === socket.teamNumber) liveTeam = null;
         if (socketsByTeam.get(socket.teamNumber) === socket.id) socketsByTeam.delete(socket.teamNumber);
+        io.emit("phone_disconnected", { number: socket.teamNumber });
         broadcastState();
       }
     });
