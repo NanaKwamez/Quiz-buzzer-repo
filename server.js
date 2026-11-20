@@ -196,6 +196,7 @@ io.on("connection", (socket) => {
     if (falseStarts.has(number) || pressQueue.some((entry) => entry.number === number)) return;
     pressQueue.push({ number, name: team.name, timestamp: Date.now() });
     broadcastState();
+    syncAllMics();
   });
 
   socket.on("host_open", () => {

@@ -162,8 +162,9 @@
         const div=document.createElement("div");div.className="team";
         div.classList.toggle("live",s.voice.liveTeam===team.number);
         const teamBlocked=s.voice.blockedTeams.includes(team.number)||s.voice.blockedGroups.includes(team.group)||s.voice.muteAll;
-        div.innerHTML=`<b class="teamNumber">#${team.number}</b><div><div>${team.name||"Unnamed"} ${team.group?"• "+team.group:""}</div><small class="${team.connected?"connected":"disconnected"}">${team.connected?"Connected":"Disconnected"} • ${teamBlocked?"MIC BLOCKED":s.voice.liveTeam===team.number?"MIC LIVE":"MIC OFF"}</small></div><div><span class="teamScore">${team.score}</span><button class="micBlock">${teamBlocked?"Unblock mic":"Block mic"}</button><button class="kick">Kick</button></div>`;
-        div.querySelector(".micBlock").onclick=()=>socket.emit("host_block_team",{number:team.number,blocked:!teamBlocked});
+        const teamToggle=s.voice.blockedTeams.includes(team.number);
+        div.innerHTML=`<b class="teamNumber">#${team.number}</b><div><div>${team.name||"Unnamed"} ${team.group?"• "+team.group:""}</div><small class="${team.connected?"connected":"disconnected"}">${team.connected?"Connected":"Disconnected"} • ${teamBlocked?"MIC BLOCKED":s.voice.liveTeam===team.number?"MIC LIVE":"MIC OFF"}</small></div><div><span class="teamScore">${team.score}</span><button class="micBlock">${teamToggle?"Unblock mic":"Block mic"}</button><button class="kick">Kick</button></div>`;
+        div.querySelector(".micBlock").onclick=()=>socket.emit("host_block_team",{number:team.number,blocked:!teamToggle});
         div.querySelector(".kick").onclick=()=>socket.emit("host_kick",team.number);board.appendChild(div);
       });
       if(s.gameState==="open"&&!timerHandle) startTimer(s.config.timerSeconds);
