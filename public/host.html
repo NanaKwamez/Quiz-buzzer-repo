@@ -47,6 +47,8 @@
     #soundFileStatus{color:#facc15}.missing{color:#fb923c}.ready{color:#4ade80}
     #webrtcLog{height:130px;overflow:auto;background:#090c12;border:1px solid #475569;border-radius:8px;padding:8px;font:12px monospace;white-space:pre-wrap}
     #diagnostics{font:12px monospace}
+    #hostMicWarning{display:none;color:#fecaca;background:#7f1d1d;border-radius:8px;padding:8px;font-weight:800}
+    .webrtcConnected{color:#4ade80!important}.webrtcFailed{color:#ef4444!important}
     #liveMic{color:#ef4444;font-weight:900;font-size:1.2rem}.team.live{box-shadow:0 0 0 3px #ef4444}.micBlock{background:#7f1d1d;color:white;border:0;border-radius:6px;padding:6px}
     @media(max-width:800px){ .top,.layout{grid-template-columns:1fr}.controls button{min-width:110px}#scoreboard{grid-template-columns:1fr}}
   </style>
@@ -54,6 +56,7 @@
 <body>
   <div id="startOverlay"><button id="startButton">START</button></div>
   <main id="app">
+    <div id="hostMicWarning"></div>
     <div class="top">
       <div>
         <div class="active" id="activePanel"><div id="activeNumber">—</div><div id="activeName">Waiting for a press</div></div>
@@ -108,6 +111,9 @@
     let availableSoundFiles=new Set();
     const peerConnections=new Map(), remoteStreams=new Map(), remoteAudios=new Map();
     const lastPhoneOffers=new Map();
+    const hostCandidateQueues=new Map();
+    const iceRestartCounts=new Map();
+    const connectionTimers=new Map();
     const preloadedGroupAudio=new Map();
     let soundScanVersion=0;
     let lastSoundsSignature="";
@@ -121,6 +127,56 @@
       const line=`[${stamp}] ${message}`;
       console.log("WebRTC:",message);
       if($("webrtcLog")){$("webrtcLog").textContent+=(line+"\n");$("webrtcLog").scrollTop=$("webrtcLog").scrollHeight;}
+    }
+    function candidateDetails(candidate){
+      if(!candidate)return null;
+      const fields=candidate.candidate||candidate;
+      const parts=String(fields).split(" ");
+      return {type:parts[7]||"unknown",address:parts[4]||"unknown",protocol:parts[2]||"unknown"};
+    }
+    async function logSelectedPair(pc,number){
+      const stats=await pc.getStats();
+      const candidates=new Map();
+      stats.forEach(report=>{
+        if(report.type==="local-candidate"||report.type==="remote-candidate")candidates.set(report.id,report);
+      });
+      stats.forEach(report=>{
+        if(report.type==="candidate-pair"&&report.nominated&&report.state==="succeeded"){
+          const local=candidates.get(report.localCandidateId)||{};
+          const remote=candidates.get(report.remoteCandidateId)||{};
+          debug(`Team #${number} selected pair local=${local.candidateType||"unknown"} ${local.address||"unknown"} remote=${remote.candidateType||"unknown"} ${remote.address||"unknown"}`);
+        }
+      });
+    }
+    function handleHostConnectionState(number,pc){
+      debug(`Team #${number} ICE state: ${pc.iceConnectionState||pc.connectionState}`);
+      if(pc.iceConnectionState==="connected"||pc.connectionState==="connected"){
+        clearTimeout(connectionTimers.get(number));
+        iceRestartCounts.set(number,0);
+        const div=[...document.querySelectorAll(".team")].find(el=>el.dataset.team==number);
+        if(div)div.classList.add("webrtcConnected");
+        div?.classList.remove("webrtcFailed");
+        logSelectedPair(pc,number);
+      }else if(pc.iceConnectionState==="checking"||pc.iceConnectionState==="connecting"){
+        clearTimeout(connectionTimers.get(number));
+        connectionTimers.set(number,setTimeout(()=>restartIce(number,pc),8000));
+      }else if(pc.iceConnectionState==="failed"||pc.connectionState==="failed"){
+        restartIce(number,pc);
+      }
+    }
+    function restartIce(number,pc){
+      const attempts=iceRestartCounts.get(number)||0;
+      if(attempts>=2){
+        const div=[...document.querySelectorAll(".team")].find(el=>el.dataset.team==number);
+        div?.classList.add("webrtcFailed");
+        div?.classList.remove("webrtcConnected");
+        socket.emit("webrtc_failed",{number,message:"Connection failed - check same Wi-Fi, VPN, and firewall"});
+        debug(`Team #${number} connection failed after 2 restart attempts`);
+        return;
+      }
+      iceRestartCounts.set(number,attempts+1);
+      debug(`Team #${number} restarting ICE attempt ${attempts+1}`);
+      socket.emit("host_ice_restart",{number});
     }
 
     function tone(frequency, duration=.35, volume=.25) {
@@ -161,7 +217,28 @@
     }
     function stopTimer(){clearInterval(timerHandle);timerHandle=null;}
     function startTimer(seconds){stopTimer();remaining=seconds;$("timer").textContent=seconds||"—";if(seconds<=0)return;timerHandle=setInterval(()=>{remaining--; $("timer").textContent=Math.max(0,remaining);if(remaining<=0)stopTimer();},1000);}
-    $("startButton").onclick=async()=>{audioContext=new (window.AudioContext||window.webkitAudioContext)();await audioContext.resume();socket.emit("host_join");$("startOverlay").style.display="none";$("app").style.display="block";};
+    $("startButton").onclick=async()=>{
+      audioContext=new (window.AudioContext||window.webkitAudioContext)();
+      await audioContext.resume();
+      if(navigator.mediaDevices?.getUserMedia){
+        try{
+          const hostStream=await navigator.mediaDevices.getUserMedia({audio:true});
+          hostStream.getTracks().forEach(track=>track.stop());
+          debug("Host microphone permission granted; tracks stopped");
+          $("hostMicWarning").style.display="none";
+        }catch(error){
+          $("hostMicWarning").style.display="block";
+          $("hostMicWarning").textContent="Host microphone permission denied; WebRTC connections may fail";
+          debug(`Host microphone permission denied: ${error.name}`);
+        }
+      }else{
+        $("hostMicWarning").style.display="block";
+        $("hostMicWarning").textContent="Mic unavailable: open the HTTPS address and accept the certificate warning";
+      }
+      socket.emit("host_join");
+      $("startOverlay").style.display="none";
+      $("app").style.display="block";
+    };
 
     function sendConfig(){socket.emit("host_config",{points:+$("points").value,wrongPoints:+$("wrongPoints").value,timerSeconds:+$("timerSeconds").value,groupNames:$("groupNames").value.split(",").map(group=>group.trim()).filter(Boolean)});}
     ["points","wrongPoints","timerSeconds"].forEach(id=>$(id).onchange=sendConfig);
@@ -286,20 +363,36 @@
       lastPhoneOffers.set(number,sdp);
       if(pc){pc.close();peerConnections.delete(number);debug(`Closed old peer connection for Team #${number}`);}
       if(!pc){
-        pc=new RTCPeerConnection({iceServers:[],iceCandidatePoolSize:0});
+        pc=new RTCPeerConnection({iceServers:[],iceCandidatePoolSize:0,bundlePolicy:"max-bundle",rtcpMuxPolicy:"require"});
         peerConnections.set(number,pc);
-        pc.onicecandidate=e=>{if(e.candidate)socket.emit("host_ice",{number,candidate:e.candidate});};
-        pc.onconnectionstatechange=()=>debug(`Team #${number} ICE state: ${pc.connectionState}`);
+        pc.onicecandidate=e=>{
+          if(!e.candidate){debug(`Team #${number} ICE gathering complete`);return;}
+          const info=candidateDetails(e.candidate);
+          debug(`Team #${number} sent candidate ${info.type} ${info.address} ${info.protocol}`);
+          socket.emit("host_ice",{number,candidate:e.candidate});
+        };
+        pc.onicecandidateerror=e=>debug(`Team #${number} candidate error ${e.errorCode}: ${e.errorText||e.url||""}`);
+        pc.onicegatheringstatechange=()=>debug(`Team #${number} gathering state: ${pc.iceGatheringState}`);
+        pc.onconnectionstatechange=()=>handleHostConnectionState(number,pc);
         pc.ontrack=e=>{
           debug(`Track received for Team #${number}: ${e.track.kind}`);
           const stream=e.streams[0]||new MediaStream([e.track]);
           remoteStreams.set(number,stream);
           let audio=remoteAudios.get(number);
-          if(!audio){audio=document.createElement("audio");audio.autoplay=true;audio.playsInline=true;audio.volume=+$("masterVolume").value;document.body.appendChild(audio);remoteAudios.set(number,audio);}
+              if(!audio){audio=document.createElement("audio");audio.controls=false;audio.autoplay=true;audio.playsInline=true;audio.volume=+$("masterVolume").value;document.body.appendChild(audio);remoteAudios.set(number,audio);}
           audio.srcObject=stream;
         };
       }
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const queued=hostCandidateQueues.get(number)||[];
+      for(const candidate of queued){
+        try{
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          const info=candidateDetails(candidate);
+          debug(`Queued ICE candidate applied Team #${number}: ${info.type} ${info.address}`);
+        }catch(error){debug(`Queued ICE candidate error Team #${number}: ${error.message}`);}
+      }
+      hostCandidateQueues.delete(number);
       const answer=await pc.createAnswer();
       await pc.setLocalDescription(answer);
       socket.emit("host_answer",{number,sdp:pc.localDescription});
@@ -307,7 +400,18 @@
     });
     socket.on("phone_ice",async({number,candidate})=>{
       const pc=peerConnections.get(number);
-      if(pc&&candidate)try{await pc.addIceCandidate(new RTCIceCandidate(candidate));debug(`ICE candidate added for Team #${number}`);}catch(error){debug(`ICE candidate error Team #${number}: ${error.message}`);}
+      if(!candidate)return;
+      if(!pc||!pc.remoteDescription){
+        const queue=hostCandidateQueues.get(number)||[];
+        queue.push(candidate);hostCandidateQueues.set(number,queue);
+        debug(`Queued ICE candidate for Team #${number}`);
+        return;
+      }
+      try{
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        const info=candidateDetails(candidate);
+        debug(`ICE candidate received Team #${number}: ${info.type} ${info.address} ${info.protocol}`);
+      }catch(error){debug(`ICE candidate error Team #${number}: ${error.message}`);}
     });
     socket.on("phone_disconnected",({number})=>{
       const pc=peerConnections.get(number);

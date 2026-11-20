@@ -181,6 +181,11 @@ async function main() {
       const target = io.sockets.sockets.get(socketsByTeam.get(Number(number)));
       if (target) target.emit("host_ice", { candidate });
     });
+    socket.on("host_ice_restart", ({ number }) => {
+      if (!socket.isHost) return;
+      const target = io.sockets.sockets.get(socketsByTeam.get(Number(number)));
+      if (target) target.emit("host_ice_restart");
+    });
 
     socket.on("buzz", () => {
       const number = socket.teamNumber;

@@ -44,6 +44,9 @@
     const socket=io(), $=id=>document.getElementById(id);
     let number=null,name="",group="",myQueueIndex=-1,pressed=false;
     let peer=null, localStream=null, micEnabled=false, pushToTalk=false;
+    let phoneRemoteDescriptionSet=false;
+    let phoneIceQueue=[];
+    let phoneRestartAttempts=0;
     const saved=JSON.parse(localStorage.getItem("quizTeam")||"null");
     if(saved&&saved.number){$("teamNumber").value=saved.number;$("teamName").value=saved.name||"";$("teamGroup").value=saved.group||"";}
     $("join").onclick=async ()=>{
@@ -93,11 +96,25 @@
         localStream.getAudioTracks().forEach(track=>track.enabled=false);
         if(peer && peer.connectionState!=="closed") return;
         if(peer) peer.close();
-        peer=new RTCPeerConnection({iceServers:[],iceCandidatePoolSize:0});
+        peer=new RTCPeerConnection({iceServers:[],iceCandidatePoolSize:0,bundlePolicy:"max-bundle",rtcpMuxPolicy:"require"});
         localStream.getTracks().forEach(track=>peer.addTrack(track,localStream));
-        peer.onicecandidate=e=>{if(e.candidate)socket.emit("phone_ice",{candidate:e.candidate});};
+        peer.onicecandidate=e=>{
+          if(!e.candidate)return;
+          socket.emit("phone_ice",{candidate:e.candidate});
+        };
+        peer.onicecandidateerror=e=>console.warn("Phone ICE candidate error",e.errorCode,e.errorText||e.url||"");
+        peer.onicegatheringstatechange=()=>console.log("Phone ICE gathering",peer.iceGatheringState);
         peer.onconnectionstatechange=()=>{
-          if(peer.connectionState==="failed")$("micStatus").textContent="VOICE CONNECTION FAILED";
+          console.log("Phone connection state",peer.iceConnectionState||peer.connectionState);
+          if(peer.iceConnectionState==="connected"||peer.connectionState==="connected"){
+            phoneRestartAttempts=0;
+            $("micStatus").textContent="MIC CONNECTION LIVE";
+            $("micStatus").className="live";
+          }else if(peer.iceConnectionState==="failed"||peer.connectionState==="failed"){
+            restartPhoneIce();
+          }else if(peer.iceConnectionState==="checking"||peer.iceConnectionState==="connecting"){
+            setTimeout(()=>{if(peer&&(peer.iceConnectionState==="checking"||peer.iceConnectionState==="connecting"))restartPhoneIce();},8000);
+          }
         };
         const offer=await peer.createOffer();
         await peer.setLocalDescription(offer);
@@ -107,13 +124,37 @@
         $("micStatus").className="blocked";
       }
     }
+    async function restartPhoneIce(){
+      if(phoneRestartAttempts>=2){
+        $("micStatus").textContent="Connection failed - check same Wi-Fi, VPN, and firewall";
+        $("micStatus").className="blocked";
+        socket.emit("webrtc_failed",{number,message:"Connection failed - check same Wi-Fi, VPN, and firewall"});
+        return;
+      }
+      phoneRestartAttempts++;
+      console.warn("Restarting phone ICE attempt",phoneRestartAttempts);
+      if(typeof peer?.restartIce==="function")peer.restartIce();
+      else{
+        const offer=await peer.createOffer({iceRestart:true});
+        await peer.setLocalDescription(offer);
+        socket.emit("phone_offer",{sdp:peer.localDescription});
+      }
+    }
     socket.on("host_answer",async({sdp})=>{
       if(!peer||!sdp)return;
       await peer.setRemoteDescription(new RTCSessionDescription(sdp));
+      phoneRemoteDescriptionSet=true;
+      for(const candidate of phoneIceQueue){
+        try{await peer.addIceCandidate(new RTCIceCandidate(candidate));}catch(error){console.warn("Queued ICE candidate error",error);}
+      }
+      phoneIceQueue=[];
     });
     socket.on("host_ice",async({candidate})=>{
-      if(peer&&candidate)try{await peer.addIceCandidate(new RTCIceCandidate(candidate));}catch(_){}
+      if(!peer||!candidate)return;
+      if(!phoneRemoteDescriptionSet){phoneIceQueue.push(candidate);return;}
+      try{await peer.addIceCandidate(new RTCIceCandidate(candidate));}catch(error){console.warn("Host ICE candidate error",error);}
     });
+    socket.on("host_ice_restart",()=>restartPhoneIce());
     socket.on("mic_command",command=>{
       pushToTalk=!!command.pushToTalk;
       micEnabled=!!command.enabled&&!command.blocked;
