@@ -25,12 +25,6 @@ app.use((_req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, "public")));
 app.get("/", (req, res) => res.redirect("/host.html"));
-app.get("/sound-status", (_req, res) => {
-  const directory = path.join(__dirname, "public", "sounds");
-  let files = [];
-  if (fs.existsSync(directory)) files = fs.readdirSync(directory).filter((name) => /^form\d+\.mp3$/i.test(name));
-  res.json({ files });
-});
 
 const teams = new Map();
 const socketsByTeam = new Map();

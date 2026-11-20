@@ -189,6 +189,7 @@
         groupNames=s.groupNames;
         $("groupNames").value=groupNames.join(", ");
         renderSoundSettings();
+        checkCustomSounds();
       }
       $("onlyActiveMic").checked=!!s.voice.onlyActiveMic;
       $("pushToTalk").checked=!!s.voice.pushToTalk;
@@ -257,10 +258,18 @@
     socket.on("wrong",({promoted})=>{tone(110,.5,.35);if(promoted&&audioContext)playGroup(groupForTeam(promoted));});
     socket.on("time_up",()=>tone(70,1,.4));
     fetch("/qr").then(r=>r.json()).then(data=>{$("qr").src=data.qr;$("network").textContent=data.url;});
-    fetch("/sound-status").then(r=>r.json()).then(data=>{
-      availableSoundFiles=new Set((data.files||[]).map(name=>name.toLowerCase()));
+    async function checkCustomSounds(){
+      availableSoundFiles=new Set();
+      await Promise.all(groupNames.map(async group=>{
+        const key=groupKey(group);
+        try{
+          const response=await fetch(`/sounds/${key}.mp3`,{method:"HEAD",cache:"no-store"});
+          if(response.ok)availableSoundFiles.add(`${key}.mp3`);
+        }catch(_){}
+      }));
       renderSoundSettings();
-    }).catch(()=>renderSoundSettings());
+    }
+    checkCustomSounds();
   </script>
 </body>
 </html>
